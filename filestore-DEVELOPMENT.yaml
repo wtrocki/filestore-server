@@ -67,22 +67,6 @@ objects:
     sessionAffinity: None
     type: ClusterIP
 
-- apiVersion: v1
-  kind: Service
-  metadata:
-    name: redis
-    labels:
-      app: filestore-server
-      template: filestore-server
-  spec:
-    ports:
-    - port: 6379
-      protocol: TCP
-      targetPort: 6379
-    selector:
-      run: redis
-    sessionAffinity: None
-    type: ClusterIP
 
 - apiVersion: apps/v1beta1
   kind: Deployment
@@ -238,51 +222,6 @@ objects:
           name: mongodb:3.2
           namespace: openshift
       type: ImageChange
-    - type: ConfigChange
-
-- apiVersion: apps/v1beta1
-  kind: Deployment
-  metadata:
-    labels:
-      app: filestore-server
-      template: filestore-server
-      run: redis
-    name: redis
-  spec:
-    replicas: 1
-    selector:
-      matchLabels:
-        run: redis
-    strategy:
-      activeDeadlineSeconds: 21600
-      rollingParams:
-        intervalSeconds: 1
-        maxSurge: 25%
-        maxUnavailable: 25%
-        timeoutSeconds: 600
-        updatePeriodSeconds: 1
-      type: RollingUpdate
-    template:
-      metadata:
-        labels:
-          run: redis
-      spec:
-        containers:
-        - name: redis
-          image: rhmap/redis:2.18.22
-          imagePullPolicy: Always
-          ports:
-          - containerPort: 6379
-            protocol: TCP
-          terminationMessagePath: /dev/termination-log
-          terminationMessagePolicy: File
-        dnsPolicy: ClusterFirst
-        restartPolicy: Always
-        schedulerName: default-scheduler
-        securityContext: {}
-        terminationGracePeriodSeconds: 30
-    test: false
-    triggers:
     - type: ConfigChange
 
 - apiVersion: v1

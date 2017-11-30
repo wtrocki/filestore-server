@@ -1,0 +1,331 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: filestore-server
+  annotations:
+    openshift.io/display-name: AeroGear File Storage (Persistent)
+    description: AeroGear FileStore Server
+    iconClass: icon-nodejs
+    tags: instant-app,mobile-service
+    template.openshift.io/long-description: File storage by AeroGear.
+    template.openshift.io/provider-display-name: AeroGear
+    template.openshift.io/documentation-url: https://github.com/wtrocki/filestore-server
+    template.openshift.io/support-url: https://github.com/wtrocki/filestore-server/issues
+labels:
+  template: filestore-server
+parameters:
+  - name: MONGODB_ADMIN_PASSWORD
+    description: Password for the MongoDB admin user. This value will be generated if not specified.
+    generate: expression
+    from: "[a-zA-Z0-9]{40}"
+  - name: MONGODB_USER_NAME
+    description: Username for the created MongoDB user.
+    value: "user"
+  - name: MONGODB_USER_PASSWORD
+    description: Password for the created MongoDB user. This value will be generated if not specified.
+    generate: expression
+    from: "[a-zA-Z0-9]{40}"
+objects:
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: filestore-server
+    annotations:
+      org.feedhenry.mcp/prometheus: "plain"
+    labels:
+      app: filestore-server
+      template: filestore-server
+  spec:
+    ports:
+    - name: filestore-server
+      port: 3000
+      protocol: TCP
+      targetPort: 3000
+    selector:
+      run: filestore-server
+    sessionAffinity: None
+    type: ClusterIP
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      template.openshift.io/expose-name: "filestore-server"
+      template.openshift.io/expose-type: "filestore-server"
+    labels:
+      app: filestore-server
+      template: filestore-server
+    name: mongodb
+  spec:
+    ports:
+    - name: mongo
+      port: 27017
+      protocol: TCP
+      targetPort: 27017
+    selector:
+      name: mongodb
+    sessionAffinity: None
+    type: ClusterIP
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: redis
+    labels:
+      app: filestore-server
+      template: filestore-server
+  spec:
+    ports:
+    - port: 6379
+      protocol: TCP
+      targetPort: 6379
+    selector:
+      run: redis
+    sessionAffinity: None
+    type: ClusterIP
+
+- apiVersion: apps/v1beta1
+  kind: Deployment
+  metadata:
+    labels:
+      app: filestore-server
+      template: filestore-server
+    name: filestore-server
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        run: filestore-server
+    strategy:
+      activeDeadlineSeconds: 21600
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: RollingUpdate
+    template:
+      metadata:
+        labels:
+          run: filestore-server
+      spec:
+        containers:
+        - name: filestore-server
+          env:
+          - name: MONGODB_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: mongodb
+          - name: MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: mongodb
+          image: aerogear/filestore-server
+          imagePullPolicy: Always
+          ports:
+          - containerPort: 3000
+            protocol: TCP
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - type: ConfigChange
+
+- apiVersion: apps/v1beta1
+  kind: Deployment
+  metadata:
+    labels:
+      app: filestore-server
+      template: filestore-server
+    name: mongodb
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        name: mongodb
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: mongodb
+      spec:
+        containers:
+        - name: mongodb
+          env:
+          - name: MONGODB_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: mongodb
+          - name: MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: mongodb
+          - name: MONGODB_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-admin-password
+                name: mongodb
+          - name: MONGODB_DATABASE
+            value: filestore
+          image: centos/mongodb-32-centos7@sha256:aa37993c3be2d4731db79c0c7aba11db3e9352b1adc586c7e9054f57808789c0
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            tcpSocket:
+              port: 27017
+            timeoutSeconds: 1
+          ports:
+          - containerPort: 27017
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - mongo 127.0.0.1:27017/$MONGODB_DATABASE -u $MONGODB_USER -p $MONGODB_PASSWORD
+                --eval="quit()"
+            failureThreshold: 3
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: 512Mi
+          securityContext:
+            capabilities: {}
+            privileged: false
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /var/lib/mongodb/data
+            name: mongodb-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - name: mongodb-data
+          persistentVolumeClaim:
+            claimName: mongodb
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - mongodb
+        from:
+          kind: ImageStreamTag
+          name: mongodb:3.2
+          namespace: openshift
+      type: ImageChange
+    - type: ConfigChange
+
+- apiVersion: apps/v1beta1
+  kind: Deployment
+  metadata:
+    labels:
+      app: filestore-server
+      template: filestore-server
+      run: redis
+    name: redis
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        run: redis
+    strategy:
+      activeDeadlineSeconds: 21600
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: RollingUpdate
+    template:
+      metadata:
+        labels:
+          run: redis
+      spec:
+        containers:
+        - name: redis
+          image: rhmap/redis:2.18.22
+          imagePullPolicy: Always
+          ports:
+          - containerPort: 6379
+            protocol: TCP
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - type: ConfigChange
+
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      template.openshift.io/expose-uri: "https://{.spec.host}{.spec.path}"
+    name: filestore-server
+    labels:
+      app: filestore-server
+      template: filestore-server
+  spec:
+    port:
+      targetPort: filestore-server
+    tls:
+      termination: edge
+    to:
+      kind: Service
+      name: filestore-server
+    wildcardPolicy: None
+
+- apiVersion: v1
+  kind: Secret
+  stringData:
+    database-admin-password: ${MONGODB_ADMIN_PASSWORD}
+    database-password: ${MONGODB_USER_PASSWORD}
+    database-user: ${MONGODB_USER_NAME}
+  metadata:
+    labels:
+      app: filestore-server
+      template: filestore-server
+    name: mongodb
+  type: Opaque
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: mongodb
+    labels:
+      app: filestore-server
+      template: filestore-server
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
